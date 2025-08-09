@@ -8,7 +8,7 @@ import concurrent.futures
 
 load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-MODEL = "llama3-70b-8192"
+MODEL = "llama3-70b-81929"
 
 META_PATH = os.path.join(os.path.dirname(__file__), '..', 'cache', 'faiss_meta.pkl')
 
@@ -85,7 +85,7 @@ def is_smalltalk(query: str):
         return "Thank you! I appreciate your feedback."
     
     # Handle typos and variations for appreciation words
-    appreciation_variations = ["great", "greate", "gr8", "gr8t", "awsome", "awsum", "perfct", "perfekt", "n1ce", "kool", "coool"]
+    appreciation_variations = ["great", "greate", "gr8", "gr8t", "awsome", "awsum", "perfct", "perfekt", "n1ce", "kool", "coool"
     if any(word in q for word in appreciation_variations):
         return "Thank you! I appreciate your feedback."
     
