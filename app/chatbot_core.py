@@ -1,0 +1,110 @@
+import os, pickle, hashlib, requests, logging
+from groq import Groq
+from bs4 import BeautifulSoup
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from dotenv import load_dotenv
+import concurrent.futures
+
+load_dotenv()
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+MODEL = "llama3-70b-8192"
+
+META_PATH = os.path.join(os.path.dirname(__file__), '..', 'cache', 'faiss_meta.pkl')
+
+# Load chunk metadata at startup
+with open(META_PATH, 'rb') as f:
+    chunk_meta = pickle.load(f)
+
+# Prepare all chunk texts for vectorization
+all_chunk_texts = [meta['text'] for meta in chunk_meta]
+
+# TF-IDF vectorizer (fit once at startup)
+tfidf_vectorizer = TfidfVectorizer().fit(all_chunk_texts)
+chunk_tfidf = tfidf_vectorizer.transform(all_chunk_texts)
+
+def find_relevant_chunks(query, k=6):
+    # 1. Direct string match (case-insensitive)
+    for meta in chunk_meta:
+        if query.lower() in meta['text'].lower():
+            return [meta['text']]
+    # 2. TF-IDF + cosine similarity
+    query_vec = tfidf_vectorizer.transform([query])
+    similarities = cosine_similarity(query_vec, chunk_tfidf).flatten()
+    top_indices = similarities.argsort()[-k:][::-1]
+    return [all_chunk_texts[i] for i in top_indices]
+
+def get_ai_response(messages, context):
+    system = {
+    "role": "system",
+        "content": (
+            "You are Aibytec's helpful chatbot. Answer only from provided context and message history.\n"
+            "Use active voice. Keep answers short (under 20 words).\n"
+            "Be clear, informative, professional, and SEO-optimized.\n"
+            "Greet if the user greets. Say goodbye politely if user says no, bye, or nothing.\n"
+            "Say 'Thank you' if user appreciates. Never say 'Hello, I am happy to assist you.'\n"
+            "If the question is inappropriate or irrelevant, respond: \"I'm sorry, I don't have the information you're looking for. You can call or WhatsApp Aibytec's team at +92 331 2154519, or email them at info.aibytech@gmail.com and they'll be happy to assist you.\n"
+            "Strict rule: Do not use generic responses like 'Aibytec offers AI services…'. Tailor each answer to the user's query.\n"
+            "Avoid reusing the same sentence in multiple responses. Each reply must be unique and context-specific.\n"
+            "If the answer is not in context, respond with: 'This part of the bot is still under construction.'\n"
+            "Aibytec provides services in chatbot development, GenAI projects, ML consulting, DL consulting, and Computer Vision solutions."
+            
+        )
+    }
+    all_msgs = [system] + messages[:-1] + [{"role": "user", "content": f"Context: {context}\n\n{messages[-1]['content']}"}]
+    try:
+        completion = client.chat.completions.create(messages=all_msgs, 
+                                                    model=MODEL,
+                                                    temperature=0.5,
+                                                    max_tokens=100)
+        return completion.choices[0].message.content
+    except:
+        return "I'm sorry, something went wrong. Please try again."
+
+def is_nonsense(query: str):
+    bad_words = ["fuck", "shit", "teleport", "mars", "unicorn", "robot", "atlantis"]
+    return any(word in query.lower() for word in bad_words)
+
+def is_smalltalk(query: str):
+    greetings = ["hi", "hello", "hey"]
+    goodbyes = ["bye", "goodbye", "no", "nothing"]
+    acknowledgments = ["ok", "okay", "fine"]
+    thanks = ["thanks", "thank you"]
+    appreciation = ["great", "awesome", "perfect", "nice", "cool"]
+
+    q = query.lower().strip()
+    if q in greetings:
+        return "Hello! How can I assist you?"
+    elif q in goodbyes:
+        return "Bye! See you later."
+    elif q in acknowledgments:
+        return "Great! Let me know if you need any more help."
+    elif q in thanks:
+        return "You're welcome! Happy to help."
+    elif q in appreciation:
+        return "Thank you! I appreciate your feedback."
+    
+    # Handle typos and variations for appreciation words
+    appreciation_variations = ["great", "greate", "gr8", "gr8t", "awsome", "awsum", "perfct", "perfekt", "n1ce", "kool", "coool"]
+    if any(word in q for word in appreciation_variations):
+        return "Thank you! I appreciate your feedback."
+    
+    return None
+
+def answer_query(query, messages, k=6):
+    # Handle nonsense
+    if is_nonsense(query):
+        return "", "I'm sorry, I can't answer that question. Please contact our team."
+
+    # Handle smalltalk
+    smalltalk_response = is_smalltalk(query)
+    if smalltalk_response:
+        return "", smalltalk_response
+
+    # Otherwise proceed with TF-IDF vector search + LLM
+    context = "\n".join(find_relevant_chunks(query, k=k))
+    reply = get_ai_response(messages, context)
+    return context, reply
+
+
+
